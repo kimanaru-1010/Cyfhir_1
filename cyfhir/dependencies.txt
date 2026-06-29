@@ -1,0 +1,15 @@
+ The POM for org.apache.maven:maven-plugin-api:jar:2.0.8 is missing, no dependency information available
+ The POM for org.apache.maven:maven-project:jar:2.0.8 is missing, no dependency information available
+ The POM for org.apache.maven:maven-model:jar:2.0.8 is missing, no dependency information available
+ The POM for org.apache.maven:maven-core:jar:2.0.8 is missing, no dependency information available
+ The POM for org.codehaus.plexus:plexus-archiver:jar:1.0-alpha-9 is missing, no dependency information available
+ The POM for org.codehaus.plexus:plexus-utils:jar:1.4.6 is missing, no dependency information available
+ The POM for org.apache.maven.shared:file-management:jar:1.1 is missing, no dependency information available
+ The POM for org.apache.maven.shared:maven-dependency-analyzer:jar:1.0 is missing, no dependency information available
+ The POM for org.apache.maven.shared:maven-dependency-tree:jar:1.1 is missing, no dependency information available
+ The POM for org.apache.maven.shared:maven-common-artifact-filters:jar:1.0 is missing, no dependency information available
+ The POM for org.codehaus.plexus:plexus-io:jar:1.0-alpha-1 is missing, no dependency information available
+ The POM for org.apache.maven.reporting:maven-reporting-impl:jar:2.0.4 is missing, no dependency information available
+ The POM for org.apache.maven.doxia:doxia-sink-api:jar:1.0-alpha-8 is missing, no dependency information available
+ The POM for org.apache.maven.doxia:doxia-site-renderer:jar:1.0-alpha-8 is missing, no dependency information available
+ Finished at: 2026-06-23T12:08:55+07:00
