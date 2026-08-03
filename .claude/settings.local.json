@@ -1,5 +1,4 @@
 {
-  "model": "sonnet",
   "env": {
     "ANTHROPIC_BASE_URL": "http://172.16.12.230:8000",
     "ANTHROPIC_API_KEY": "ollama",
@@ -11,5 +10,11 @@
     "MAX_THINKING_TOKENS": "32000",
     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000",
     "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"
+  },
+  "model": "sonnet",
+  "permissions": {
+    "allow": [
+      "PowerShell(mvn -version)"
+    ]
   }
 }

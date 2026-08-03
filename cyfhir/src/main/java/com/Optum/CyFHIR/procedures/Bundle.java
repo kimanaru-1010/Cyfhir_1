@@ -1,65 +1,112 @@
 package com.Optum.CyFHIR.procedures;
 
-import com.Optum.CyFHIR.models.Entry;
-import com.Optum.CyFHIR.models.Validator;
-import com.Optum.CyFHIR.models.FhirRelationship;
 import apoc.result.MapResult;
-import org.neo4j.graphdb.*;
-import org.neo4j.procedure.*;
+import org.neo4j.graphdb.GraphDatabaseService;
+import org.neo4j.graphdb.Transaction;
+import org.neo4j.procedure.Context;
+import org.neo4j.procedure.Description;
+import org.neo4j.procedure.Mode;
+import org.neo4j.procedure.Name;
+import org.neo4j.procedure.Procedure;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 
+/** Loads Bundle.entry.resource values directly without creating Bundle or entry nodes. */
 public class Bundle {
-    public static Validator validator;
 
     @Context
     public GraphDatabaseService db;
 
-    public Bundle() throws Exception {
-        validator = new Validator();
-    }
-
     @Procedure(name = "cyfhir.bundle.load", mode = Mode.WRITE)
-    @Description("cyfhir.bundle.load(String bundle, config: { validation: Boolean, version: String }) loads a FHIR bundle into the neo4j, must be a stringified JSON. "
-            + "The config allows you to turn on FHIR validation and pick a version with choices being DSTU3, R4, and R5. If validation == true, the default for fhir version is R4")
-    public Stream<MapResult> load(@Name("json") String json,
-            @Name(value = "config", defaultValue = "{}") Map<String, Object> configMap) throws Exception {
+    @Description("Loads each Bundle.entry.resource independently. Bundle.entry.fullUrl is ignored.")
+    @SuppressWarnings("unchecked")
+    public Stream<MapResult> load(
+            @Name("json") String json,
+            @Name(value = "config", defaultValue = "{}") Map<String, Object> config) throws Exception {
 
-        Transaction tx = db.beginTx();
-        Resource resourceClass = new Resource();
-        // Generate JSON object from string of json
-        Map<String, Object> bundleMap = resourceClass.stringToMap(json);
-        String resourceType = (String) bundleMap.get("resourceType");
-        resourceClass.validateFHIR(json, resourceType, configMap);
+        Resource resourceProcedure = new Resource();
+        Map<String, Object> bundle = resourceProcedure.stringToMap(json);
+        requireBundle(bundle);
+        resourceProcedure.validateFHIR(json, "Bundle", config);
 
-        /* Get entries from bundle */
-        ArrayList<Map<String, Object>> entries = (ArrayList<Map<String, Object>>) bundleMap.get("entry");
-        // Relationship Array
-        ArrayList<FhirRelationship> relationships = new ArrayList<FhirRelationship>();
-        ArrayList<String> fullUrls = new ArrayList<>();
-        // Iterate over entries
-        entries.forEach((entry) -> {
-            Map<String, Object> resource = (Map<String, Object>) entry.get("resource");
-            Entry entryObj = new Entry();
-            entryObj.setResource(resource);
-            relationships.addAll(resourceClass.addToDatabase(entryObj, tx));
-            fullUrls.add((String) entryObj.get("fullUrl"));
-        });
-        resourceClass.createRelationships(relationships, tx);
-        // Create map for response
-        Map<String, Object> responseMap = new HashMap<>();
-        responseMap.put("fullUrls", fullUrls);
-        Stream<MapResult> stream = Stream.of(new MapResult(responseMap));
+        List<?> entries = entries(bundle);
+        List<String> resourceKeys = new ArrayList<String>();
+        Resource.ResolutionStats total = new Resource.ResolutionStats();
+        int skippedEntries = 0;
 
-        // This function attaches references to all of the resources currently being loaded from previously loaded
-        // resources.
-        // It runs a Cypher Query due to there being >700 possible node labels that can have a reference as a property
-        resourceClass.attachLooseReferences(fullUrls, tx);
+        try (Transaction tx = db.beginTx()) {
+            for (Object rawEntry : entries) {
+                Map<String, Object> resource = resourceFrom(rawEntry);
+                if (resource == null) {
+                    skippedEntries++;
+                    continue;
+                }
 
-        tx.commit();
-        tx.close();
-        return stream;
+                Resource.WriteResult result = resourceProcedure.writeResource(resource, tx);
+                Resource.ResolutionStats stats =
+                        resourceProcedure.resolveLoadedResource(tx, result, config);
+
+                resourceKeys.add(result.resourceKey);
+                total.add(stats);
+            }
+
+            Map<String, Object> response = response(
+                    resourceKeys,
+                    skippedEntries,
+                    total);
+
+            tx.commit();
+            return Stream.of(new MapResult(response));
+        }
     }
 
+    private static void requireBundle(Map<String, Object> bundle) {
+        Object resourceType = bundle.get("resourceType");
+        if (!"Bundle".equals(resourceType)) {
+            throw new IllegalArgumentException(
+                    "cyfhir.bundle.load requires resourceType=Bundle");
+        }
+    }
+
+    private static List<?> entries(Map<String, Object> bundle) {
+        Object value = bundle.get("entry");
+        return value instanceof List
+                ? (List<?>) value
+                : Collections.emptyList();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> resourceFrom(Object rawEntry) {
+        if (!(rawEntry instanceof Map)) {
+            return null;
+        }
+
+        Object resource = ((Map<String, Object>) rawEntry).get("resource");
+        return resource instanceof Map
+                ? (Map<String, Object>) resource
+                : null;
+    }
+
+    private static Map<String, Object> response(
+            List<String> resourceKeys,
+            int skippedEntries,
+            Resource.ResolutionStats stats) {
+
+        Map<String, Object> response = new LinkedHashMap<String, Object>();
+        response.put("resourceKeys", resourceKeys);
+        response.put("loadedResources", resourceKeys.size());
+        response.put("skippedEntries", skippedEntries);
+        response.put("referencesResolved", stats.referencesResolved);
+        response.put("referencesPending", stats.referencesPending);
+        response.put("referencesAmbiguous", stats.referencesAmbiguous);
+        response.put("extensionRelationships", stats.extensionRelationships);
+        response.put("canonicalRelationships", stats.canonicalRelationships);
+        response.put("codingRelationships", stats.codingRelationships);
+        return response;
+    }
 }

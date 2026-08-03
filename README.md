@@ -162,7 +162,5 @@ URL rewrite: FHIR server trả về next link là http://hapi-fhir:8080/fhir (t�
 Binary data quá lớn: Mỗi Binary ~4MB → strip field data trước khi load, batch 500/page
 Bước 7: Gọi endpoint
 
-curl -X POST http://localhost:3000/api/LoadAllResources \
-  -H "Content-Type: application/json" \
-  -d '{"fhirBaseUrl":"http://172.16.12.230:8012/fhir"}'
+curl.exe -X POST http://localhost:3000/api/LoadAllResources -H "Content-Type: application/json" -d "{\"fhirBaseUrl\":\"http://172.16.12.230:8012/fhir\"}"
 → 24.390 resources, 22 resource types → tất cả vào Neo4j

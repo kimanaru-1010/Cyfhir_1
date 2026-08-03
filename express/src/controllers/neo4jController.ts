@@ -1,20 +1,29 @@
 import { Request, Response } from 'express';
-import neo4j, { Driver, Session } from 'neo4j-driver';
+import neo4j, { Driver, Session, auth } from 'neo4j-driver';
 import cypher from './cypherController';
 
-function transactionInformation(): { driver: Driver; session: Session } {
-  const uri = process.env.NEO4J_URI;
-  const auth = process.env.NEO4J_PASSWORD ? neo4j.auth.basic('neo4j', 'password') : null;
+// Singleton driver - tạo 1 lần duy nhất
+let driver: Driver | null = null;
 
-  const driver: Driver = neo4j.driver(uri, auth, { disableLosslessIntegers: true });
-  const session: Session = driver.session();
-  return { driver, session };
+function getDriver(): Driver {
+  if (!driver) {
+    const uri = process.env.NEO4J_URI || 'bolt://localhost:7687';
+    const password = process.env.NEO4J_PASSWORD || 'password';
+    driver = neo4j.driver(uri, auth.basic('neo4j', password), {
+      disableLosslessIntegers: true,
+      maxConnectionLifetime: 30 * 60 * 1000,
+      maxConnectionPoolSize: 50,
+      connectionAcquisitionTimeout: 2 * 60 * 1000,
+      maxTransactionRetryTime: 10 * 60 * 1000, // 10 phút retry
+    });
+  }
+  return driver;
 }
 
 async function verifyConnection() {
-  const { driver, session } = transactionInformation();
+  const d = getDriver();
   try {
-    await driver.verifyConnectivity();
+    await d.verifyConnectivity();
     console.log('Verified Neo4j Connection');
   } catch (error) {
     console.log(`Connectivity Verification Failed: ${error}`);
@@ -23,26 +32,23 @@ async function verifyConnection() {
 
 function startTransaction(cypher: string, res) {
   try {
-    const transaction = transactionInformation();
-    const resultPromise = transaction.session.writeTransaction(tx => tx.run(cypher));
+    const d = getDriver();
+    const session: Session = d.session();
 
-    resultPromise.then(result => {
-      transaction.session.close();
-      transaction.driver.close();
-      return res({
-        result
+    session.writeTransaction(tx => tx.run(cypher))
+      .then(result => {
+        return res({ result });
+      })
+      .catch(error => {
+        console.log(error);
+        return res({ error });
+      })
+      .finally(() => {
+        session.close();
       });
-    }).catch(error => {
-      console.log(error);
-      return res({
-        error
-      });
-    });
   } catch (error) {
     console.log(error);
-    return (res({
-      error
-    }));
+    return res({ error });
   }
 }
 // }1. Nhận vào một chuỗi Cypher
@@ -79,10 +85,10 @@ function loadBundleNeo4jPromise(_bundle: any): Promise<any> {
 
 function deleteAllNodes(req: Request, res: Response) {
   startTransaction(cypher.deleteAll(), (result) => {
-    if (result.result) {
+    if (result && result.result !== undefined) {
       return res.status(200).send('All nodes deleted');
     } else {
-      return res.status(500).send(result.error);
+      return res.status(500).send(result?.error || 'Error');
     }
   });
 }
@@ -148,14 +154,16 @@ function getResource(_id: string, res: Response) {
 }
 
 // Strip large binary data from entries before loading
-// Bỏ bớt nội dung chứa ví dụ như ảnh tránh nặng quá 
 function sanitizeEntry(entry: any): any {
   if (!entry?.resource) return entry;
   const r = entry.resource;
-  // Binary: strip the base64 data
-  if (r.resourceType === 'Binary' && r.data !== undefined) {
+  // Strip binary data from all resources
+  if (r.data !== undefined) {
     r.data = undefined;
-    r.contentType = r.contentType || 'unknown';
+  }
+  // Strip text.div (generated HTML) from all resources
+  if (r.text?.div !== undefined) {
+    r.text.div = undefined;
   }
   // DocumentReference: strip attachment data
   if (r.resourceType === 'DocumentReference' && r.content) {
@@ -218,7 +226,9 @@ async function loadFromFhirServer(_params: any, res: Response) {
       // Rewrite next link URL to use external address instead of internal Docker name
       const nextLink = bundle.link?.find((l: any) => l.relation === 'next');
       url = nextLink
-        ? nextLink.url.replace('http://hapi-fhir:8080/fhir', fhirBaseUrl)
+        ? nextLink.url
+            .replace('http://hapi-fhir:8080/fhir', fhirBaseUrl)
+            .replace('http://172.16.12.230:8014/fhir', fhirBaseUrl)
         : null;
     }
 
@@ -260,6 +270,11 @@ export = {
   },
   loadAllResources: (params: any, res: Response) => {
     return loadAllResources(params, res);
+  },
+  closeDriver: () => {
+    if (driver) {
+      return driver.close();
+    }
   }
 };
 
@@ -267,21 +282,64 @@ async function loadAllResources(_params: any, res: Response) {
   const fhirBaseUrl = _params.fhirBaseUrl || 'http://172.16.12.230:8012/fhir';
 
   // List of resource types from Neo4j
-  const resourceTypes = ['Patient', 'Organization', 'ActivityDefinition','Location', 'Encounter', 'MedicationRequest', 'Medication',
-    'Account', 'Binary', 'ValueSet', 'CodeSystem', 'NamingSystem',
-    'Observation', 'StructureDefinition', 'Library', 'PlanDefinition',
-     'Practitioner','PractitionerRole', 'DiagnosticReport', 
-    'Condition', 
+  const resourceTypes = [
+
+
+    // 'Binary',
+    // 'ValueSet',
+    'StructureDefinition',
+    'CodeSystem',
+    // 'NamingSystem',
+
+    'Library',
+    'PlanDefinition',
+    'ActivityDefinition',
+
+
+    'Patient',
+
+    'Organization',
+    'Location',
+
+    'Practitioner',
+    'PractitionerRole',
+
+    'Medication',
+
+    'Encounter',
+    'ServiceRequest',
+    'Procedure',
+
+    'Observation',
+    'DiagnosticReport',
+
+    'Condition',
+
+    'Composition',
+
+    'Coverage',
+    'Claim',
+    'ExplanationOfBenefit',
+
+    'MedicationRequest',
+    'MedicationStatement',
+
+
      ];
+
+  const largeResourceTypes = new Set(['Binary', 'ValueSet', 'CodeSystem', 'StructureDefinition', 'Library', 'NamingSystem']);
 
   // Strip large binary data before loading to avoid oversized bundles
   function sanitizeEntry(entry: any): any {
     if (!entry?.resource) return entry;
     const r = entry.resource;
-    // Binary: strip the base64 data
-    if (r.resourceType === 'Binary' && r.data !== undefined) {
+    // Strip binary data from all resources
+    if (r.data !== undefined) {
       r.data = undefined;
-      r.contentType = r.contentType || 'unknown';
+    }
+    // Strip text.div (generated HTML) from all resources
+    if (r.text?.div !== undefined) {
+      r.text.div = undefined;
     }
     // DocumentReference: strip attachment data
     if (r.resourceType === 'DocumentReference' && r.content) {
@@ -300,7 +358,8 @@ async function loadAllResources(_params: any, res: Response) {
   for (const resourceType of resourceTypes) {
     try {
       let totalLoaded = 0;
-      let url = `${fhirBaseUrl}/${resourceType}?_count=500`;
+      const pageSize = largeResourceTypes.has(resourceType) ? '100' : '500';
+      let url = `${fhirBaseUrl}/${resourceType}?_count=${pageSize}`;
       let pageNum = 0;
 
       while (url) {
@@ -327,9 +386,12 @@ async function loadAllResources(_params: any, res: Response) {
           totalLoaded += sanitized.length;
         }
 
+        // Rewrite next link URL to use external address instead of internal Docker name
         const nextLink = bundle.link?.find((l: any) => l.relation === 'next');
         url = nextLink
-          ? nextLink.url.replace('http://hapi-fhir:8080/fhir', fhirBaseUrl)
+          ? nextLink.url
+              .replace('http://hapi-fhir:8080/fhir', fhirBaseUrl)
+              .replace('http://172.16.12.230:8014/fhir', fhirBaseUrl)
           : null;
       }
 

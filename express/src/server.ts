@@ -38,3 +38,16 @@ if (require.main === module) {
       process.exit(1);
     });
 }
+
+// Graceful shutdown - close Neo4j driver
+process.on('SIGTERM', () => {
+  console.log('SIGTERM received, closing Neo4j driver...');
+  neo4jController.closeDriver();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  console.log('SIGINT received, closing Neo4j driver...');
+  neo4jController.closeDriver();
+  process.exit(0);
+});

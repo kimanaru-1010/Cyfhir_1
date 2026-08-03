@@ -1,94 +1,146 @@
 package com.Optum.CyFHIR.procedures;
 
-import apoc.util.Util;
-import apoc.result.MapResult;
 import apoc.convert.ConvertConfig;
+import apoc.result.MapResult;
+import apoc.util.Util;
+import org.neo4j.graphdb.Entity;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Path;
-import org.neo4j.graphdb.Entity;
 import org.neo4j.graphdb.Relationship;
+import org.neo4j.procedure.Description;
 import org.neo4j.procedure.Name;
 import org.neo4j.procedure.Procedure;
-import org.neo4j.procedure.Description;
 
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+/**
+ * Keeps the existing APOC-compatible tree conversion API. The implementation is
+ * deliberately independent of the removed :entry model.
+ */
 public class Convert {
 
     @Procedure(name = "cyfhir.convert.toTree")
-    @Description("cyfhir.convert.toTree([paths],[lowerCaseRels=true], [config]) creates a stream of nested documents representing the at least one root of these paths")
+    @Description("Creates nested maps from supplied paths without assuming an :entry root.")
     public Stream<MapResult> toTree(@Name("paths") List<Path> paths,
             @Name(value = "lowerCaseRels", defaultValue = "true") boolean lowerCaseRels,
             @Name(value = "config", defaultValue = "{}") Map<String, Object> config) {
-        if (paths.isEmpty())
-            return Stream.of(new MapResult(Collections.emptyMap()));
-        ConvertConfig conf = new ConvertConfig(config);
-        Map<String, List<String>> nodes = conf.getNodes();
-        Map<String, List<String>> rels = conf.getRels();
+        if (paths == null || paths.isEmpty()) {
+            return Stream.of(new MapResult(Collections.<String, Object>emptyMap()));
+        }
 
-        Map<Long, Map<String, Object>> maps = new HashMap<>(paths.size() * 100);
+        ConvertConfig convertConfig = new ConvertConfig(config == null
+                ? Collections.<String, Object>emptyMap() : config);
+        Map<String, List<String>> nodeFilters = convertConfig.getNodes();
+        Map<String, List<String>> relationshipFilters = convertConfig.getRels();
+        Map<Long, Map<String, Object>> nodeMaps = new LinkedHashMap<Long, Map<String, Object>>();
+
         for (Path path : paths) {
-            Iterator<Entity> it = path.iterator();
-            while (it.hasNext()) {
-                Node n = (Node) it.next();
-                Map<String, Object> nMap = maps.computeIfAbsent(n.getId(), (id) -> toMap(n, nodes));
-                if (it.hasNext()) {
-                    Relationship r = (Relationship) it.next();
-                    Node m = r.getOtherNode(n);
-                    String typeName = lowerCaseRels ? r.getType().name().toLowerCase() : r.getType().name();
-                    // parent-[:HAS_CHILD]->(child) vs. (parent)<-[:PARENT_OF]-(child)
-                    if (!nMap.containsKey(typeName))
-                        nMap.put(typeName, new ArrayList<>(16));
-                    List<Map<String, Object>> list = (List) nMap.get(typeName);
-                    Optional<Map<String, Object>> optMap = list.stream()
-                            .filter(elem -> elem.get("_id").equals(m.getId())).findFirst();
-                    if (!optMap.isPresent()) {
-                        Map<String, Object> mMap = toMap(m, nodes);
-                        mMap = addRelProperties(mMap, typeName, r, rels);
-                        maps.put(m.getId(), mMap);
-                        list.add(maps.get(m.getId()));
-                    }
+            Iterator<Entity> iterator = path.iterator();
+            while (iterator.hasNext()) {
+                Entity entity = iterator.next();
+                if (!(entity instanceof Node)) {
+                    continue;
+                }
+                Node current = (Node) entity;
+                Map<String, Object> currentMap = nodeMaps.computeIfAbsent(current.getId(),
+                        id -> toMap(current, nodeFilters));
+
+                if (!iterator.hasNext()) {
+                    continue;
+                }
+                Entity relationshipEntity = iterator.next();
+                if (!(relationshipEntity instanceof Relationship) || !iterator.hasNext()) {
+                    continue;
+                }
+                Relationship relationship = (Relationship) relationshipEntity;
+                Entity nextEntity = iterator.next();
+                if (!(nextEntity instanceof Node)) {
+                    continue;
+                }
+                Node child = (Node) nextEntity;
+                String relationshipName = lowerCaseRels
+                        ? relationship.getType().name().toLowerCase(Locale.ROOT)
+                        : relationship.getType().name();
+
+                List<Map<String, Object>> children = childList(currentMap, relationshipName);
+                if (!containsNode(children, child.getId())) {
+                    Map<String, Object> childMap = toMap(child, nodeFilters);
+                    addRelationshipProperties(childMap, relationshipName, relationship, relationshipFilters);
+                    nodeMaps.put(child.getId(), childMap);
+                    children.add(childMap);
                 }
             }
         }
-        return paths.stream().map(Path::startNode).distinct().map(n -> maps.remove(n.getId()))
-                .map(m -> m == null ? Collections.<String, Object> emptyMap() : m).map(MapResult::new);
+
+        return paths.stream()
+                .map(Path::startNode)
+                .distinct()
+                .map(node -> nodeMaps.get(node.getId()))
+                .map(map -> map == null ? Collections.<String, Object>emptyMap() : map)
+                .map(MapResult::new);
     }
 
-    private Map<String, Object> addRelProperties(Map<String, Object> mMap, String typeName, Relationship r,
-            Map<String, List<String>> relFilters) {
-        Map<String, Object> rProps = r.getAllProperties();
-        if (rProps.isEmpty())
-            return mMap;
-        String prefix = typeName + ".";
-        if (relFilters.containsKey(typeName)) {
-            rProps = filterProperties(rProps, relFilters.get(typeName));
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> childList(Map<String, Object> parent, String relationshipName) {
+        Object existing = parent.get(relationshipName);
+        if (existing instanceof List) {
+            return (List<Map<String, Object>>) existing;
         }
-        rProps.forEach((k, v) -> mMap.put(prefix + k, v));
-        return mMap;
+        List<Map<String, Object>> children = new ArrayList<Map<String, Object>>();
+        parent.put(relationshipName, children);
+        return children;
     }
 
-    private Map<String, Object> filterProperties(Map<String, Object> props, List<String> filters) {
-        boolean isExclude = filters.get(0).startsWith("-");
-
-        return props.entrySet().stream()
-                .filter(e -> isExclude ? !filters.contains("-" + e.getKey()) : filters.contains(e.getKey()))
-                .collect(Collectors.toMap(k -> k.getKey(), v -> v.getValue()));
+    private static boolean containsNode(List<Map<String, Object>> children, long nodeId) {
+        for (Map<String, Object> child : children) {
+            Object id = child.get("_id");
+            if (id instanceof Number && ((Number) id).longValue() == nodeId) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    private Map<String, Object> toMap(Node n, Map<String, List<String>> nodeFilters) {
-        Map<String, Object> props = n.getAllProperties();
-        Map<String, Object> result = new LinkedHashMap<>(props.size() + 2);
-        String type = Util.labelString(n);
-        result.put("_id", n.getId());
+    private static void addRelationshipProperties(Map<String, Object> child, String relationshipName,
+            Relationship relationship, Map<String, List<String>> filters) {
+        Map<String, Object> properties = relationship.getAllProperties();
+        if (properties.isEmpty()) {
+            return;
+        }
+        if (filters != null && filters.containsKey(relationshipName)) {
+            properties = filterProperties(properties, filters.get(relationshipName));
+        }
+        String prefix = relationshipName + ".";
+        for (Map.Entry<String, Object> property : properties.entrySet()) {
+            child.put(prefix + property.getKey(), property.getValue());
+        }
+    }
+
+    private static Map<String, Object> toMap(Node node, Map<String, List<String>> filters) {
+        Map<String, Object> properties = node.getAllProperties();
+        Map<String, Object> result = new LinkedHashMap<String, Object>(properties.size() + 2);
+        String type = Util.labelString(node);
+        result.put("_id", node.getId());
         result.put("_type", type);
-        if (nodeFilters.containsKey(type)) { // Check if list contains LABEL
-            props = filterProperties(props, nodeFilters.get(type));
+        if (filters != null && filters.containsKey(type)) {
+            properties = filterProperties(properties, filters.get(type));
         }
-        result.putAll(props);
+        result.putAll(properties);
         return result;
     }
 
+    private static Map<String, Object> filterProperties(Map<String, Object> properties, List<String> filters) {
+        if (filters == null || filters.isEmpty()) {
+            return properties;
+        }
+        boolean exclude = filters.get(0).startsWith("-");
+        return properties.entrySet().stream()
+                .filter(entry -> exclude
+                        ? !filters.contains("-" + entry.getKey())
+                        : filters.contains(entry.getKey()))
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue,
+                        (left, right) -> right, LinkedHashMap::new));
+    }
 }
