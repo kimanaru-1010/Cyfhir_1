@@ -106,6 +106,7 @@ public class Bundle {
         response.put("referencesAmbiguous", stats.referencesAmbiguous);
         response.put("extensionRelationships", stats.extensionRelationships);
         response.put("canonicalRelationships", stats.canonicalRelationships);
+        response.put("attachmentRelationships", stats.attachmentRelationships);
         response.put("codingRelationships", stats.codingRelationships);
         return response;
     }

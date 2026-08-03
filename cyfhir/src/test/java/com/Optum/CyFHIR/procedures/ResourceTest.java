@@ -141,4 +141,30 @@ class ResourceTest {
             assertThat(relationship_count1).isEqualTo(relationship_count2);
         }
     }
+
+    @Test
+    void loadMediaContentUrlResolvesToBinary() throws IOException {
+        Map binary = loadJsonFromFile("src/test/resources/BinaryImage.json");
+        String binaryString = toJsonString(binary);
+
+        Map media = loadJsonFromFile("src/test/resources/MediaWithBinaryUrl.json");
+        String mediaString = toJsonString(media);
+
+        Driver driver = getSessionDriver();
+        try (Session session = driver.session()) {
+            session.run("CALL cyfhir.resource.load(" + binaryString + ")");
+            Result loadMedia = session.run("CALL cyfhir.resource.load(" + mediaString + ")");
+            Record loadRecord = loadMedia.single();
+
+            assertThat(loadRecord.get("attachmentRelationships").asInt()).isEqualTo(1);
+
+            Result result = session.run(
+                    "MATCH (:FHIRResource:Media {id: 'media-skin-001'})-[:content]->" +
+                    "(content {url: 'Binary/skin-image-001'})-[:RESOLVES_TO]->" +
+                    "(:FHIRResource:Binary {id: 'skin-image-001'}) " +
+                    "RETURN count(*) AS relationshipCount");
+
+            assertThat(result.single().get("relationshipCount").asInt()).isEqualTo(1);
+        }
+    }
 }

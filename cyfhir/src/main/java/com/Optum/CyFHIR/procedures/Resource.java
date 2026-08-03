@@ -23,7 +23,7 @@ import java.util.stream.Stream;
 
 /**
  * Loads one FHIR resource as a graph and creates only the selected mappings:
- * Reference, Extension, baseDefinition, meta.profile and Coding.
+ * Reference, Attachment.url, Extension, baseDefinition, meta.profile and Coding.
  */
 public class Resource {
     public static final Uniqueness UNIQUENESS = Uniqueness.RELATIONSHIP_PATH;
@@ -110,6 +110,7 @@ public class Resource {
             response.put("referencesAmbiguous", stats.referencesAmbiguous);
             response.put("extensionRelationships", stats.extensionRelationships);
             response.put("canonicalRelationships", stats.canonicalRelationships);
+            response.put("attachmentRelationships", stats.attachmentRelationships);
             response.put("codingRelationships", stats.codingRelationships);
 
             tx.commit();
@@ -145,6 +146,7 @@ public class Resource {
             response.put("referencesAmbiguous", total.referencesAmbiguous);
             response.put("extensionRelationships", total.extensionRelationships);
             response.put("canonicalRelationships", total.canonicalRelationships);
+            response.put("attachmentRelationships", total.attachmentRelationships);
             response.put("codingRelationships", total.codingRelationships);
 
             tx.commit();
@@ -206,6 +208,7 @@ public class Resource {
 
         resolvePendingReferences(tx, result.resourceNode, stats);
         resolveExtensions(tx, graph, stats);
+        resolveAttachmentUrls(tx, graph, stats);
         resolveBaseDefinition(tx, result.resourceNode, stats);
         resolveMetaProfiles(tx, result.resourceNode, graph, stats);
         resolveCodings(tx, graph, stats);
@@ -423,6 +426,28 @@ public class Resource {
         return findSingle(tx, QUERY_CANONICAL, params(
                 "resourceType", resourceType,
                 "url", url));
+    }
+
+    private void resolveAttachmentUrls(
+            Transaction tx,
+            List<Node> graph,
+            ResolutionStats stats) {
+
+        for (Node node : graph) {
+            String binaryId = binaryIdFromAttachmentUrl(stringProperty(node, "url"));
+            if (isBlank(binaryId)) {
+                continue;
+            }
+
+            List<Node> matches = findMany(tx, QUERY_RESOURCE, params(
+                    "resourceType", "Binary",
+                    "id", binaryId));
+
+            if (matches.size() == 1) {
+                createUniqueRelationship(node, matches.get(0), REL_RESOLVES_TO);
+                stats.attachmentRelationships++;
+            }
+        }
     }
 
     /* ------------------------------ Graph writer ------------------------------ */
@@ -825,6 +850,37 @@ public class Resource {
         return slash >= 0 ? rawType.substring(slash + 1) : rawType;
     }
 
+    private static String binaryIdFromAttachmentUrl(String rawUrl) {
+        if (isBlank(rawUrl)) {
+            return null;
+        }
+
+        String value = rawUrl.trim();
+        int query = value.indexOf('?');
+        if (query >= 0) {
+            value = value.substring(0, query);
+        }
+        int fragment = value.indexOf('#');
+        if (fragment >= 0) {
+            value = value.substring(0, fragment);
+        }
+        int history = value.indexOf("/_history/");
+        if (history >= 0) {
+            value = value.substring(0, history);
+        }
+
+        if (value.startsWith("Binary/")) {
+            return value.substring("Binary/".length());
+        }
+
+        int marker = value.indexOf("/Binary/");
+        if (marker >= 0) {
+            return value.substring(marker + "/Binary/".length());
+        }
+
+        return null;
+    }
+
     private static Map<String, Object> params(Object... values) {
         Map<String, Object> result = new HashMap<String, Object>();
         for (int index = 0; index < values.length; index += 2) {
@@ -1215,6 +1271,7 @@ public class Resource {
         long referencesAmbiguous;
         long extensionRelationships;
         long canonicalRelationships;
+        long attachmentRelationships;
         long codingRelationships;
         long terminologyRelationships;  // Compatibility alias for Bundle code.
 
@@ -1235,6 +1292,7 @@ public class Resource {
             referencesAmbiguous += other.referencesAmbiguous;
             extensionRelationships += other.extensionRelationships;
             canonicalRelationships += other.canonicalRelationships;
+            attachmentRelationships += other.attachmentRelationships;
             codingRelationships += other.codingRelationships;
             terminologyRelationships += other.terminologyRelationships;
         }

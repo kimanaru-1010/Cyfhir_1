@@ -285,7 +285,7 @@ async function loadAllResources(_params: any, res: Response) {
   const resourceTypes = [
 
 
-    // 'Binary',
+    'Binary',
     // 'ValueSet',
     'StructureDefinition',
     'CodeSystem',
@@ -311,6 +311,9 @@ async function loadAllResources(_params: any, res: Response) {
     'Procedure',
 
     'Observation',
+    'Media',
+    'DocumentReference',
+    'ImagingStudy',
     'DiagnosticReport',
 
     'Condition',
@@ -327,7 +330,15 @@ async function loadAllResources(_params: any, res: Response) {
 
      ];
 
-  const largeResourceTypes = new Set(['Binary', 'ValueSet', 'CodeSystem', 'StructureDefinition', 'Library', 'NamingSystem']);
+  const largeResourceTypes = new Set([
+    'Binary',
+    'DocumentReference',
+    'ValueSet',
+    'CodeSystem',
+    'StructureDefinition',
+    'Library',
+    'NamingSystem',
+  ]);
 
   // Strip large binary data before loading to avoid oversized bundles
   function sanitizeEntry(entry: any): any {

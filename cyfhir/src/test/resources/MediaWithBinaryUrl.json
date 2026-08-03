@@ -1,0 +1,20 @@
+{
+  "resourceType": "Media",
+  "id": "media-skin-001",
+  "status": "completed",
+  "subject": {
+    "reference": "Patient/patient-001"
+  },
+  "bodySite": {
+    "text": "Left forearm"
+  },
+  "content": {
+    "contentType": "image/jpeg",
+    "url": "Binary/skin-image-001"
+  },
+  "note": [
+    {
+      "text": "Image shows a white depigmented skin patch with irregular border."
+    }
+  ]
+}
